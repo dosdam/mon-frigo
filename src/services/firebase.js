@@ -29,11 +29,32 @@ function assertFirebaseReady() {
   }
 }
 
+function mapAuthError(error) {
+  const code = error?.code || '';
+  if (code === 'auth/configuration-not-found') {
+    return new Error('Firebase Authentication non configurée: activez Authentication puis Anonymous dans Firebase Console.');
+  }
+  if (code === 'auth/operation-not-allowed') {
+    return new Error('Connexion anonyme désactivée: activez Anonymous dans Firebase Authentication.');
+  }
+  if (code === 'auth/invalid-api-key') {
+    return new Error('API key Firebase invalide: vérifiez VITE_FIREBASE_API_KEY dans .env.');
+  }
+  if (code === 'auth/network-request-failed') {
+    return new Error('Réseau indisponible: impossible de joindre Firebase.');
+  }
+  return error instanceof Error ? error : new Error(String(error || 'Erreur Firebase inconnue'));
+}
+
 export async function signInToCloud() {
   assertFirebaseReady();
   if (auth.currentUser) return auth.currentUser;
-  const credential = await signInAnonymously(auth);
-  return credential.user;
+  try {
+    const credential = await signInAnonymously(auth);
+    return credential.user;
+  } catch (error) {
+    throw mapAuthError(error);
+  }
 }
 
 export function subscribeToHousehold(householdId, onData, onError) {

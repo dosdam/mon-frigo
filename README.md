@@ -36,3 +36,13 @@ service cloud.firestore {
 	}
 }
 ```
+
+### Depannage: Firebase Error (auth/configuration-not-found)
+
+Si cette erreur apparait, le projet Firebase n'a pas encore Authentication configuree.
+
+1. Ouvrez Firebase Console > votre projet > Build > Authentication.
+2. Cliquez sur "Get started" si propose.
+3. Onglet "Sign-in method" > activez "Anonymous".
+4. Verifiez que `VITE_FIREBASE_PROJECT_ID` et `VITE_FIREBASE_API_KEY` pointent bien vers ce meme projet.
+5. Redemarrez `npm run dev` (Vite recharge .env au demarrage).
