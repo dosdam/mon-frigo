@@ -1,6 +1,1 @@
-{
-  "appId": "fr.matthieu.moncongelateur",
-  "appName": "Mon Congélateur",
-  "webDir": "dist",
-  "server": { "androidScheme": "https" }
-}
+{"appId":"fr.matthieu.moncongelateur","appName":"Mon Congélateur","webDir":"dist","server":{"androidScheme":"https"}}
