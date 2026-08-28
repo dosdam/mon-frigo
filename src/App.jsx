@@ -1,14 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Scanner from './components/Scanner.jsx';
 import { findFood } from './services/openFoodFacts.js';
+import {
+  isFirebaseReady,
+  saveHouseholdData,
+  signInToCloud,
+  subscribeToHousehold,
+} from './services/firebase.js';
 
 const initialAppliances = [
   { id: 'f1', name: 'Congélateur cuisine', type: 'Congélateur', shelves: [{id:'s1',name:'Tiroir 1'},{id:'s2',name:'Tiroir 2'},{id:'s3',name:'Tiroir 3'}] },
   { id: 'f2', name: 'Réfrigérateur', type: 'Réfrigérateur', shelves: [{id:'s4',name:'Étage haut'},{id:'s5',name:'Étage milieu'},{id:'s6',name:'Bac à légumes'},{id:'s7',name:'Porte'}] }
 ];
+const householdKey = 'householdId';
 const load = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
 const days = d => Math.ceil((new Date(`${d}T00:00:00`) - new Date().setHours(0,0,0,0)) / 864e5);
 const uid = prefix => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const sanitizeHousehold = value => String(value || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').slice(0, 64);
+const serializeCloudData = payload => JSON.stringify(payload);
 
 function normalizeAppliances(list) {
   return list.map(a => ({...a, type:a.type || 'Congélateur', shelves:(a.shelves || []).map(s => typeof s === 'string' ? {id:uid('s'),name:s} : s)}));
@@ -25,14 +34,121 @@ function migrateProducts(list, appliances) {
 export default function App() {
   const [appliances, setAppliances] = useState(() => normalizeAppliances(load('appliances', initialAppliances)));
   const [products, setProducts] = useState(() => migrateProducts(load('products', []), normalizeAppliances(load('appliances', initialAppliances))));
+  const [householdId, setHouseholdId] = useState(() => sanitizeHousehold(localStorage.getItem(householdKey) || 'famille-congelateur'));
+  const [syncMessage, setSyncMessage] = useState(() => isFirebaseReady ? 'Connexion au cloud…' : 'Cloud inactif (configuration Firebase manquante)');
+  const [syncError, setSyncError] = useState('');
   const [tab, setTab] = useState('home');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const [drawerView, setDrawerView] = useState(null);
+  const appliancesRef = useRef(appliances);
+  const productsRef = useRef(products);
+  const cloudReadyRef = useRef(false);
+  const lastCloudHashRef = useRef('');
 
   useEffect(() => localStorage.setItem('appliances', JSON.stringify(appliances)), [appliances]);
   useEffect(() => localStorage.setItem('products', JSON.stringify(products)), [products]);
+  useEffect(() => { appliancesRef.current = appliances; }, [appliances]);
+  useEffect(() => { productsRef.current = products; }, [products]);
+  useEffect(() => {
+    if (householdId) localStorage.setItem(householdKey, householdId);
+  }, [householdId]);
+
+  useEffect(() => {
+    if (!isFirebaseReady) return;
+    let isMounted = true;
+    let unsubscribe = () => {};
+
+    setSyncError('');
+    setSyncMessage('Connexion au cloud…');
+    cloudReadyRef.current = false;
+
+    async function connect() {
+      try {
+        await signInToCloud();
+        if (!isMounted) return;
+        setSyncMessage(`Cloud connecté (${householdId})`);
+
+        unsubscribe = subscribeToHousehold(
+          householdId,
+          async remote => {
+            if (!isMounted) return;
+
+            if (!remote) {
+              const payload = { appliances: appliancesRef.current, products: productsRef.current };
+              const hash = serializeCloudData(payload);
+              await saveHouseholdData(householdId, payload);
+              lastCloudHashRef.current = hash;
+              cloudReadyRef.current = true;
+              setSyncMessage(`Cloud initialisé (${householdId})`);
+              return;
+            }
+
+            const nextAppliances = normalizeAppliances(remote.appliances || initialAppliances);
+            const nextProducts = migrateProducts(remote.products || [], nextAppliances);
+            const remotePayload = { appliances: nextAppliances, products: nextProducts };
+            const remoteHash = serializeCloudData(remotePayload);
+            const localHash = serializeCloudData({ appliances: appliancesRef.current, products: productsRef.current });
+
+            lastCloudHashRef.current = remoteHash;
+            cloudReadyRef.current = true;
+
+            if (remoteHash !== localHash) {
+              setAppliances(nextAppliances);
+              setProducts(nextProducts);
+            }
+
+            setSyncMessage(`Cloud synchronisé (${householdId})`);
+          },
+          error => {
+            if (!isMounted) return;
+            setSyncError(error.message || 'Erreur inconnue Firebase');
+            setSyncMessage('Erreur de synchronisation cloud');
+          }
+        );
+      } catch (error) {
+        if (!isMounted) return;
+        setSyncError(error.message || 'Connexion Firebase impossible');
+        setSyncMessage('Cloud indisponible');
+      }
+    }
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [householdId]);
+
+  useEffect(() => {
+    if (!isFirebaseReady || !cloudReadyRef.current) return;
+
+    const payload = { appliances, products };
+    const nextHash = serializeCloudData(payload);
+    if (nextHash === lastCloudHashRef.current) return;
+
+    let cancelled = false;
+    setSyncMessage(`Synchronisation cloud (${householdId})…`);
+
+    saveHouseholdData(householdId, payload)
+      .then(() => {
+        if (cancelled) return;
+        lastCloudHashRef.current = nextHash;
+        setSyncError('');
+        setSyncMessage(`Cloud synchronisé (${householdId})`);
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setSyncError(error.message || 'Erreur d\'écriture Firebase');
+        setSyncMessage('Erreur de synchronisation cloud');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appliances, products, householdId]);
 
   const shown = useMemo(() => products.filter(p =>
     (filter === 'all' || p.applianceId === filter) &&
@@ -62,7 +178,7 @@ export default function App() {
       {tab === 'home' && <Home appliances={appliances} products={products} scan={()=>setModal({type:'scan'})} add={()=>setModal({type:'form',product:null,code:''})} openShelf={openShelf}/>} 
       {tab === 'stock' && <Stock appliances={appliances} products={shown} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} edit={p=>setModal({type:'form',product:p})}/>} 
       {tab === 'dates' && <Dates products={products}/>} 
-      {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} setProducts={setProducts}/>} 
+      {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError}/>} 
       {tab === 'drawers' && <DrawerView appliances={appliances} products={products} selection={drawerView} setSelection={setDrawerView} edit={p=>setModal({type:'form',product:p})}/>} 
     </main>
 
@@ -90,12 +206,31 @@ function DrawerView({appliances,products,selection,setSelection,edit}) {
   return <><h2 className="text-xl font-bold">Vue par tiroir</h2><select className="input bg-white" value={appliance?.id||''} onChange={e=>{const a=appliances.find(x=>x.id===e.target.value);setSelection({applianceId:a.id,shelfId:a.shelves[0]?.id})}}>{appliances.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><div className="flex gap-2 overflow-auto">{appliance?.shelves.map(s=><Chip key={s.id} active={s.id===shelf?.id} click={()=>setSelection({applianceId:appliance.id,shelfId:s.id})}>{s.name}</Chip>)}</div><div className="rounded-2xl bg-gradient-to-b from-cyan-50 to-white p-4 shadow-inner"><div className="mb-3 flex justify-between"><b>▤ {shelf?.name}</b><span className="rounded-full bg-cyan-100 px-2 py-1 text-xs">{list.length} produit(s)</span></div>{list.length?list.map(p=><ProductRow key={p.id} p={p} edit={edit}/>):<Empty text="Cet emplacement est vide"/>}</div></>;
 }
 
-function Settings({appliances,setAppliances,products,setProducts}) {
+function Settings({appliances,setAppliances,products,householdId,setHouseholdId,syncMessage,syncError}) {
   const [newNames,setNewNames]=useState({});
+  const [newHousehold,setNewHousehold]=useState(householdId);
+  useEffect(()=>setNewHousehold(householdId),[householdId]);
   function addShelf(applianceId){const name=(newNames[applianceId]||'').trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:[...a.shelves,{id:uid('s'),name}]}:a));setNewNames(x=>({...x,[applianceId]:''}))}
   function renameShelf(applianceId,shelfId){const current=appliances.find(a=>a.id===applianceId)?.shelves.find(s=>s.id===shelfId);const name=window.prompt('Nouveau nom de l’emplacement',current?.name||'')?.trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:a.shelves.map(s=>s.id===shelfId?{...s,name}:s)}:a))}
   function deleteShelf(applianceId,shelfId){if(products.some(p=>p.applianceId===applianceId&&p.shelfId===shelfId)){window.alert('Impossible : déplacez ou supprimez d’abord les produits de cet emplacement.');return}setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:a.shelves.filter(s=>s.id!==shelfId)}:a))}
-  return <><h2 className="text-xl font-bold">Gérer les emplacements</h2>{appliances.map(a=><section key={a.id} className="space-y-3 rounded-2xl bg-white p-4 shadow-sm"><div><b>{a.name}</b><small className="block text-slate-500">{a.type}</small></div>{a.shelves.map(s=><div key={s.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3"><span className="flex-1"><b className="text-sm">{s.name}</b><small className="block text-slate-500">{products.filter(p=>p.applianceId===a.id&&p.shelfId===s.id).length} produit(s)</small></span><button onClick={()=>renameShelf(a.id,s.id)} className="rounded-lg border px-2 py-1 text-sm">Renommer</button><button onClick={()=>deleteShelf(a.id,s.id)} className="rounded-lg border border-red-200 px-2 py-1 text-sm text-red-600">×</button></div>)}<div className="flex gap-2"><input value={newNames[a.id]||''} onChange={e=>setNewNames(x=>({...x,[a.id]:e.target.value}))} placeholder="Nouveau tiroir ou emplacement" className="input min-w-0 flex-1"/><button onClick={()=>addShelf(a.id)} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">+</button></div></section>)}</>;
+  function connectHousehold(){
+    const clean = sanitizeHousehold(newHousehold);
+    if(!clean){window.alert('Saisissez un identifiant de foyer valide.');return}
+    setHouseholdId(clean);
+  }
+  return <><h2 className="text-xl font-bold">Réglages</h2>
+    <section className="mb-4 space-y-3 rounded-2xl bg-white p-4 shadow-sm">
+      <b className="block">Synchronisation cloud (Firebase)</b>
+      <small className="block text-slate-600">Utilisez le même identifiant de foyer sur les deux téléphones pour partager la même liste.</small>
+      <div className="flex gap-2">
+        <input value={newHousehold} onChange={e=>setNewHousehold(e.target.value)} placeholder="Ex: famille-dupont" className="input min-w-0 flex-1"/>
+        <button onClick={connectHousehold} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">Connecter</button>
+      </div>
+      <small className="block rounded-xl bg-slate-100 p-3 text-slate-700">{syncMessage}</small>
+      {syncError && <small className="block rounded-xl bg-red-50 p-3 text-red-700">{syncError}</small>}
+      {!isFirebaseReady && <small className="block rounded-xl bg-amber-50 p-3 text-amber-700">Ajoutez les variables VITE_FIREBASE_* dans un fichier .env pour activer la synchro.</small>}
+    </section>
+    <h2 className="text-xl font-bold">Gérer les emplacements</h2>{appliances.map(a=><section key={a.id} className="space-y-3 rounded-2xl bg-white p-4 shadow-sm"><div><b>{a.name}</b><small className="block text-slate-500">{a.type}</small></div>{a.shelves.map(s=><div key={s.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3"><span className="flex-1"><b className="text-sm">{s.name}</b><small className="block text-slate-500">{products.filter(p=>p.applianceId===a.id&&p.shelfId===s.id).length} produit(s)</small></span><button onClick={()=>renameShelf(a.id,s.id)} className="rounded-lg border px-2 py-1 text-sm">Renommer</button><button onClick={()=>deleteShelf(a.id,s.id)} className="rounded-lg border border-red-200 px-2 py-1 text-sm text-red-600">×</button></div>)}<div className="flex gap-2"><input value={newNames[a.id]||''} onChange={e=>setNewNames(x=>({...x,[a.id]:e.target.value}))} placeholder="Nouveau tiroir ou emplacement" className="input min-w-0 flex-1"/><button onClick={()=>addShelf(a.id)} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">+</button></div></section>)}</>;
 }
 
 function Stock({appliances,products,filter,setFilter,search,setSearch,edit}) { return <><h2 className="text-xl font-bold">Stock</h2><input className="input" placeholder="Rechercher" value={search} onChange={e=>setSearch(e.target.value)}/><div className="flex gap-2 overflow-auto"><Chip active={filter==='all'} click={()=>setFilter('all')}>Tout</Chip>{appliances.map(a=><Chip key={a.id} active={filter===a.id} click={()=>setFilter(a.id)}>{a.name}</Chip>)}</div>{products.length?products.map(p=><ProductRow key={p.id} p={p} edit={edit}/>):<Empty text="Aucun produit"/>}</> }

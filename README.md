@@ -12,3 +12,27 @@ npm run android:open
 ```
 
 Après chaque modification : `npm run android:sync`.
+
+## Synchroniser les donnees entre deux telephones (Firebase)
+
+1. Creez un projet Firebase.
+2. Activez Authentication > Sign-in method > Anonymous.
+3. Activez Firestore Database (mode production recommande).
+4. Copiez `.env.example` vers `.env` et renseignez les variables `VITE_FIREBASE_*`.
+5. Lancez l'app sur les deux telephones avec la meme configuration Firebase.
+6. Dans Reglages, saisissez le meme identifiant de foyer (ex: `famille-dupont`) sur les deux appareils.
+
+L'application synchronise en temps reel les emplacements et produits dans `households/{identifiant}`.
+
+### Exemple de regles Firestore (MVP)
+
+```txt
+rules_version = '2';
+service cloud.firestore {
+	match /databases/{database}/documents {
+		match /households/{householdId} {
+			allow read, write: if request.auth != null;
+		}
+	}
+}
+```
