@@ -22,6 +22,7 @@ const days = d => Math.ceil((new Date(`${d}T00:00:00`) - new Date().setHours(0,0
 const uid = prefix => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const sanitizeHousehold = value => String(value || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').slice(0, 64);
 const serializeCloudData = payload => JSON.stringify(payload);
+const hasLocalCloudData = payload => payload.products.length > 0 || serializeCloudData(payload.appliances) !== serializeCloudData(initialAppliances);
 
 function normalizeAppliances(list) {
   return list.map(a => ({...a, type:a.type || 'Congélateur', shelves:(a.shelves || []).map(s => typeof s === 'string' ? {id:uid('s'),name:s} : s)}));
@@ -142,11 +143,16 @@ export default function App() {
 
             if (!remote) {
               const payload = { appliances: appliancesRef.current, products: productsRef.current };
-              const hash = serializeCloudData(payload);
-              await saveHouseholdData(householdId, payload);
-              lastCloudHashRef.current = hash;
+              if (hasLocalCloudData(payload)) {
+                const hash = serializeCloudData(payload);
+                await saveHouseholdData(householdId, payload);
+                lastCloudHashRef.current = hash;
+                setSyncMessage(`Cloud initialise (${householdId})`);
+              } else {
+                lastCloudHashRef.current = '';
+                setSyncMessage(`Cloud vide (${householdId})`);
+              }
               cloudReadyRef.current = true;
-              setSyncMessage(`Cloud initialise (${householdId})`);
               return;
             }
 
