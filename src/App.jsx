@@ -7,6 +7,7 @@ import {
   loginWithEmail,
   logoutFromCloud,
   observeAuthState,
+  readHouseholdData,
   registerWithEmail,
   saveHouseholdData,
   subscribeToHousehold,
@@ -46,6 +47,8 @@ export default function App() {
   const [authReady, setAuthReady] = useState(() => !isFirebaseReady);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [cloudCheckMessage, setCloudCheckMessage] = useState('');
+  const [cloudCheckBusy, setCloudCheckBusy] = useState(false);
   const [tab, setTab] = useState('home');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -106,6 +109,42 @@ export default function App() {
       setAuthError(error.message || 'Deconnexion impossible');
     } finally {
       setAuthBusy(false);
+    }
+  }
+
+  async function verifyCloudSnapshot() {
+    if (!isFirebaseReady) {
+      setCloudCheckMessage('Firebase non configure.');
+      return;
+    }
+    if (!authUser) {
+      setCloudCheckMessage('Connectez-vous pour verifier le cloud.');
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setCloudCheckMessage('Appareil hors ligne (internet indisponible).');
+      return;
+    }
+    setCloudCheckBusy(true);
+    try {
+      const data = await readHouseholdData(householdId);
+      if (!data) {
+        setCloudCheckMessage(`Aucun document cloud pour ${householdId}.`);
+      } else {
+        const productsCount = Array.isArray(data.products) ? data.products.length : 0;
+        const appliancesCount = Array.isArray(data.appliances) ? data.appliances.length : 0;
+        const updatedAt = data.updatedAt?.toDate ? data.updatedAt.toDate().toLocaleString('fr-FR') : 'inconnu';
+        setCloudCheckMessage(`Cloud OK: ${productsCount} produit(s), ${appliancesCount} appareil(s), maj ${updatedAt}.`);
+      }
+    } catch (error) {
+      const message = error.message || 'Verification cloud impossible.';
+      if (String(message).toLowerCase().includes('offline')) {
+        setCloudCheckMessage('Impossible de joindre Firestore depuis cet appareil (reseau ou blocage).');
+      } else {
+        setCloudCheckMessage(message);
+      }
+    } finally {
+      setCloudCheckBusy(false);
     }
   }
 
@@ -249,7 +288,7 @@ export default function App() {
       {tab === 'home' && <Home appliances={appliances} products={products} scan={()=>setModal({type:'scan'})} add={()=>setModal({type:'form',product:null,code:''})} openShelf={openShelf}/>} 
       {tab === 'stock' && <Stock appliances={appliances} products={shown} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} edit={p=>setModal({type:'form',product:p})}/>} 
       {tab === 'dates' && <Dates products={products}/>} 
-      {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError} authUser={authUser} authBusy={authBusy} authError={authError} onLogin={doLogin} onRegister={doRegister} onLogout={doLogout}/>} 
+      {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError} authUser={authUser} authBusy={authBusy} authError={authError} onLogin={doLogin} onRegister={doRegister} onLogout={doLogout} onVerifyCloud={verifyCloudSnapshot} cloudCheckMessage={cloudCheckMessage} cloudCheckBusy={cloudCheckBusy}/>} 
       {tab === 'drawers' && <DrawerView appliances={appliances} products={products} selection={drawerView} setSelection={setDrawerView} edit={p=>setModal({type:'form',product:p})}/>} 
     </main>
 
@@ -277,7 +316,7 @@ function DrawerView({appliances,products,selection,setSelection,edit}) {
   return <><h2 className="text-xl font-bold">Vue par tiroir</h2><select className="input bg-white" value={appliance?.id||''} onChange={e=>{const a=appliances.find(x=>x.id===e.target.value);setSelection({applianceId:a.id,shelfId:a.shelves[0]?.id})}}>{appliances.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><div className="flex gap-2 overflow-auto">{appliance?.shelves.map(s=><Chip key={s.id} active={s.id===shelf?.id} click={()=>setSelection({applianceId:appliance.id,shelfId:s.id})}>{s.name}</Chip>)}</div><div className="rounded-2xl bg-gradient-to-b from-cyan-50 to-white p-4 shadow-inner"><div className="mb-3 flex justify-between"><b>▤ {shelf?.name}</b><span className="rounded-full bg-cyan-100 px-2 py-1 text-xs">{list.length} produit(s)</span></div>{list.length?list.map(p=><ProductRow key={p.id} p={p} edit={edit}/>):<Empty text="Cet emplacement est vide"/>}</div></>;
 }
 
-function Settings({appliances,setAppliances,products,householdId,setHouseholdId,syncMessage,syncError,authUser,authBusy,authError,onLogin,onRegister,onLogout}) {
+function Settings({appliances,setAppliances,products,householdId,setHouseholdId,syncMessage,syncError,authUser,authBusy,authError,onLogin,onRegister,onLogout,onVerifyCloud,cloudCheckMessage,cloudCheckBusy}) {
   const [newNames,setNewNames]=useState({});
   const [newHousehold,setNewHousehold]=useState(householdId);
   const [email,setEmail]=useState('');
@@ -318,6 +357,8 @@ function Settings({appliances,setAppliances,products,householdId,setHouseholdId,
         <input value={newHousehold} onChange={e=>setNewHousehold(e.target.value)} placeholder="Ex: famille-dupont" className="input min-w-0 flex-1"/>
         <button onClick={connectHousehold} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">Connecter</button>
       </div>
+      <button onClick={onVerifyCloud} disabled={cloudCheckBusy} className="rounded-xl border border-slate-300 px-4 py-2 font-bold text-slate-700 disabled:opacity-60">Verifier le cloud</button>
+      {cloudCheckMessage && <small className="block rounded-xl bg-blue-50 p-3 text-blue-700">{cloudCheckMessage}</small>}
       <small className="block rounded-xl bg-slate-100 p-3 text-slate-700">{syncMessage}</small>
       {syncError && <small className="block rounded-xl bg-red-50 p-3 text-red-700">{syncError}</small>}
       {!isFirebaseReady && <small className="block rounded-xl bg-amber-50 p-3 text-amber-700">Ajoutez les variables VITE_FIREBASE_* dans un fichier .env pour activer la synchro.</small>}

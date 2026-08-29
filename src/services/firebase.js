@@ -6,7 +6,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
-import { doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import { doc, getDoc, getFirestore, initializeFirestore, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -26,7 +26,15 @@ let db = null;
 if (isFirebaseReady) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
-  db = getFirestore(app);
+  try {
+    db = initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: false,
+      experimentalForceLongPolling: true,
+      useFetchStreams: false,
+    });
+  } catch {
+    db = getFirestore(app);
+  }
 }
 
 function assertFirebaseReady() {
@@ -60,6 +68,12 @@ function mapAuthError(error) {
   }
   if (code === 'auth/network-request-failed') {
     return new Error('Réseau indisponible: impossible de joindre Firebase.');
+  }
+  if (code === 'unavailable') {
+    return new Error('Client hors ligne: impossible de joindre Firestore.');
+  }
+  if (code === 'permission-denied') {
+    return new Error('Acces refuse par les regles Firestore (permission-denied).');
   }
   return error instanceof Error ? error : new Error(String(error || 'Erreur Firebase inconnue'));
 }
@@ -118,4 +132,14 @@ export async function saveHouseholdData(householdId, data) {
     schemaVersion: 1,
     updatedAt: serverTimestamp(),
   }, { merge: true });
+}
+
+export async function readHouseholdData(householdId) {
+  assertFirebaseReady();
+  try {
+    const snapshot = await getDoc(doc(db, 'households', householdId));
+    return snapshot.exists() ? snapshot.data() : null;
+  } catch (error) {
+    throw mapAuthError(error);
+  }
 }
