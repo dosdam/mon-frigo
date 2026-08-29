@@ -2,9 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Scanner from './components/Scanner.jsx';
 import { findFood } from './services/openFoodFacts.js';
 import {
+  getCurrentUser,
   isFirebaseReady,
+  loginWithEmail,
+  logoutFromCloud,
+  observeAuthState,
+  registerWithEmail,
   saveHouseholdData,
-  signInToCloud,
   subscribeToHousehold,
 } from './services/firebase.js';
 
@@ -37,6 +41,10 @@ export default function App() {
   const [householdId, setHouseholdId] = useState(() => sanitizeHousehold(localStorage.getItem(householdKey) || 'famille-congelateur'));
   const [syncMessage, setSyncMessage] = useState(() => isFirebaseReady ? 'Connexion au cloud…' : 'Cloud inactif (configuration Firebase manquante)');
   const [syncError, setSyncError] = useState('');
+  const [authUser, setAuthUser] = useState(() => getCurrentUser());
+  const [authReady, setAuthReady] = useState(() => !isFirebaseReady);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
   const [tab, setTab] = useState('home');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -57,6 +65,64 @@ export default function App() {
 
   useEffect(() => {
     if (!isFirebaseReady) return;
+    const unsubscribe = observeAuthState(user => {
+      setAuthUser(user);
+      setAuthReady(true);
+    });
+    return unsubscribe;
+  }, []);
+
+  async function doLogin(email, password) {
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      await loginWithEmail(email, password);
+    } catch (error) {
+      setAuthError(error.message || 'Connexion impossible');
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function doRegister(email, password) {
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      await registerWithEmail(email, password);
+    } catch (error) {
+      setAuthError(error.message || 'Creation de compte impossible');
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function doLogout() {
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      await logoutFromCloud();
+    } catch (error) {
+      setAuthError(error.message || 'Deconnexion impossible');
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isFirebaseReady) return;
+    if (!authReady) {
+      setSyncError('');
+      setSyncMessage('Verification de la session…');
+      cloudReadyRef.current = false;
+      return;
+    }
+    if (!authUser) {
+      setSyncError('Connectez-vous avec email/mot de passe pour activer la synchro cloud.');
+      setSyncMessage('Cloud en attente de connexion');
+      cloudReadyRef.current = false;
+      return;
+    }
+
     let isMounted = true;
     let unsubscribe = () => {};
 
@@ -66,9 +132,8 @@ export default function App() {
 
     async function connect() {
       try {
-        await signInToCloud();
         if (!isMounted) return;
-        setSyncMessage(`Cloud connecté (${householdId})`);
+        setSyncMessage(`Cloud connecte (${householdId})`);
 
         unsubscribe = subscribeToHousehold(
           householdId,
@@ -81,7 +146,7 @@ export default function App() {
               await saveHouseholdData(householdId, payload);
               lastCloudHashRef.current = hash;
               cloudReadyRef.current = true;
-              setSyncMessage(`Cloud initialisé (${householdId})`);
+              setSyncMessage(`Cloud initialise (${householdId})`);
               return;
             }
 
@@ -99,7 +164,7 @@ export default function App() {
               setProducts(nextProducts);
             }
 
-            setSyncMessage(`Cloud synchronisé (${householdId})`);
+            setSyncMessage(`Cloud synchronise (${householdId})`);
           },
           error => {
             if (!isMounted) return;
@@ -120,10 +185,10 @@ export default function App() {
       isMounted = false;
       unsubscribe();
     };
-  }, [householdId]);
+  }, [householdId, authReady, authUser]);
 
   useEffect(() => {
-    if (!isFirebaseReady || !cloudReadyRef.current) return;
+    if (!isFirebaseReady || !authUser || !cloudReadyRef.current) return;
 
     const payload = { appliances, products };
     const nextHash = serializeCloudData(payload);
@@ -137,7 +202,7 @@ export default function App() {
         if (cancelled) return;
         lastCloudHashRef.current = nextHash;
         setSyncError('');
-        setSyncMessage(`Cloud synchronisé (${householdId})`);
+        setSyncMessage(`Cloud synchronise (${householdId})`);
       })
       .catch(error => {
         if (cancelled) return;
@@ -148,7 +213,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appliances, products, householdId]);
+  }, [appliances, products, householdId, authUser]);
 
   const shown = useMemo(() => products.filter(p =>
     (filter === 'all' || p.applianceId === filter) &&
@@ -178,7 +243,7 @@ export default function App() {
       {tab === 'home' && <Home appliances={appliances} products={products} scan={()=>setModal({type:'scan'})} add={()=>setModal({type:'form',product:null,code:''})} openShelf={openShelf}/>} 
       {tab === 'stock' && <Stock appliances={appliances} products={shown} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} edit={p=>setModal({type:'form',product:p})}/>} 
       {tab === 'dates' && <Dates products={products}/>} 
-      {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError}/>} 
+      {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError} authUser={authUser} authBusy={authBusy} authError={authError} onLogin={doLogin} onRegister={doRegister} onLogout={doLogout}/>} 
       {tab === 'drawers' && <DrawerView appliances={appliances} products={products} selection={drawerView} setSelection={setDrawerView} edit={p=>setModal({type:'form',product:p})}/>} 
     </main>
 
@@ -206,9 +271,11 @@ function DrawerView({appliances,products,selection,setSelection,edit}) {
   return <><h2 className="text-xl font-bold">Vue par tiroir</h2><select className="input bg-white" value={appliance?.id||''} onChange={e=>{const a=appliances.find(x=>x.id===e.target.value);setSelection({applianceId:a.id,shelfId:a.shelves[0]?.id})}}>{appliances.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><div className="flex gap-2 overflow-auto">{appliance?.shelves.map(s=><Chip key={s.id} active={s.id===shelf?.id} click={()=>setSelection({applianceId:appliance.id,shelfId:s.id})}>{s.name}</Chip>)}</div><div className="rounded-2xl bg-gradient-to-b from-cyan-50 to-white p-4 shadow-inner"><div className="mb-3 flex justify-between"><b>▤ {shelf?.name}</b><span className="rounded-full bg-cyan-100 px-2 py-1 text-xs">{list.length} produit(s)</span></div>{list.length?list.map(p=><ProductRow key={p.id} p={p} edit={edit}/>):<Empty text="Cet emplacement est vide"/>}</div></>;
 }
 
-function Settings({appliances,setAppliances,products,householdId,setHouseholdId,syncMessage,syncError}) {
+function Settings({appliances,setAppliances,products,householdId,setHouseholdId,syncMessage,syncError,authUser,authBusy,authError,onLogin,onRegister,onLogout}) {
   const [newNames,setNewNames]=useState({});
   const [newHousehold,setNewHousehold]=useState(householdId);
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
   useEffect(()=>setNewHousehold(householdId),[householdId]);
   function addShelf(applianceId){const name=(newNames[applianceId]||'').trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:[...a.shelves,{id:uid('s'),name}]}:a));setNewNames(x=>({...x,[applianceId]:''}))}
   function renameShelf(applianceId,shelfId){const current=appliances.find(a=>a.id===applianceId)?.shelves.find(s=>s.id===shelfId);const name=window.prompt('Nouveau nom de l’emplacement',current?.name||'')?.trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:a.shelves.map(s=>s.id===shelfId?{...s,name}:s)}:a))}
@@ -218,9 +285,28 @@ function Settings({appliances,setAppliances,products,householdId,setHouseholdId,
     if(!clean){window.alert('Saisissez un identifiant de foyer valide.');return}
     setHouseholdId(clean);
   }
+  async function submitLogin(){
+    if(!email.trim() || password.length < 6){window.alert('Saisissez un email valide et un mot de passe (6 caracteres min).');return}
+    await onLogin(email.trim(), password);
+  }
+  async function submitRegister(){
+    if(!email.trim() || password.length < 6){window.alert('Saisissez un email valide et un mot de passe (6 caracteres min).');return}
+    await onRegister(email.trim(), password);
+  }
   return <><h2 className="text-xl font-bold">Réglages</h2>
     <section className="mb-4 space-y-3 rounded-2xl bg-white p-4 shadow-sm">
       <b className="block">Synchronisation cloud (Firebase)</b>
+      <small className="block text-slate-600">Connexion compte: {authUser?.email || 'non connecte'}</small>
+      {!authUser && <div className="space-y-2 rounded-xl bg-slate-50 p-3">
+        <input value={email} onChange={e=>setEmail(e.target.value)} type="email" placeholder="Email" className="input"/>
+        <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="Mot de passe" className="input"/>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={submitLogin} disabled={authBusy} className="rounded-xl bg-cyan-600 px-4 py-2 font-bold text-white disabled:opacity-60">Se connecter</button>
+          <button onClick={submitRegister} disabled={authBusy} className="rounded-xl border border-cyan-300 px-4 py-2 font-bold text-cyan-700 disabled:opacity-60">Creer un compte</button>
+        </div>
+      </div>}
+      {authUser && <button onClick={onLogout} disabled={authBusy} className="rounded-xl border border-red-200 px-4 py-2 font-bold text-red-600 disabled:opacity-60">Se deconnecter</button>}
+      {authError && <small className="block rounded-xl bg-red-50 p-3 text-red-700">{authError}</small>}
       <small className="block text-slate-600">Utilisez le même identifiant de foyer sur les deux téléphones pour partager la même liste.</small>
       <div className="flex gap-2">
         <input value={newHousehold} onChange={e=>setNewHousehold(e.target.value)} placeholder="Ex: famille-dupont" className="input min-w-0 flex-1"/>

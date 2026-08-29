@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  getAuth,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth';
 import { doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
 
 const firebaseConfig = {
@@ -32,13 +38,25 @@ function assertFirebaseReady() {
 function mapAuthError(error) {
   const code = error?.code || '';
   if (code === 'auth/configuration-not-found') {
-    return new Error('Firebase Authentication non configurée: activez Authentication puis Anonymous dans Firebase Console.');
+    return new Error('Firebase Authentication non configurée: activez Authentication dans Firebase Console.');
   }
   if (code === 'auth/operation-not-allowed') {
-    return new Error('Connexion anonyme désactivée: activez Anonymous dans Firebase Authentication.');
+    return new Error('Connexion Email/mot de passe desactivée: activez Email/Password dans Firebase Authentication.');
   }
   if (code === 'auth/invalid-api-key') {
     return new Error('API key Firebase invalide: vérifiez VITE_FIREBASE_API_KEY dans .env.');
+  }
+  if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password') {
+    return new Error('Email ou mot de passe invalide.');
+  }
+  if (code === 'auth/invalid-email') {
+    return new Error('Format d\'email invalide.');
+  }
+  if (code === 'auth/email-already-in-use') {
+    return new Error('Cet email est deja utilise.');
+  }
+  if (code === 'auth/weak-password') {
+    return new Error('Mot de passe trop faible (6 caracteres minimum).');
   }
   if (code === 'auth/network-request-failed') {
     return new Error('Réseau indisponible: impossible de joindre Firebase.');
@@ -46,12 +64,40 @@ function mapAuthError(error) {
   return error instanceof Error ? error : new Error(String(error || 'Erreur Firebase inconnue'));
 }
 
-export async function signInToCloud() {
+export function observeAuthState(onChange) {
   assertFirebaseReady();
-  if (auth.currentUser) return auth.currentUser;
+  return onAuthStateChanged(auth, onChange);
+}
+
+export function getCurrentUser() {
+  if (!isFirebaseReady || !auth) return null;
+  return auth.currentUser;
+}
+
+export async function loginWithEmail(email, password) {
+  assertFirebaseReady();
   try {
-    const credential = await signInAnonymously(auth);
+    const credential = await signInWithEmailAndPassword(auth, email, password);
     return credential.user;
+  } catch (error) {
+    throw mapAuthError(error);
+  }
+}
+
+export async function registerWithEmail(email, password) {
+  assertFirebaseReady();
+  try {
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
+    return credential.user;
+  } catch (error) {
+    throw mapAuthError(error);
+  }
+}
+
+export async function logoutFromCloud() {
+  assertFirebaseReady();
+  try {
+    await signOut(auth);
   } catch (error) {
     throw mapAuthError(error);
   }
