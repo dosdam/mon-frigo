@@ -293,7 +293,7 @@ export default function App() {
     <main className="space-y-4 p-4">
       {tab === 'home' && <Home appliances={appliances} products={products} scan={()=>setModal({type:'scan'})} add={()=>setModal({type:'form',product:null,code:''})} openShelf={openShelf}/>} 
       {tab === 'stock' && <Stock appliances={appliances} products={shown} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} edit={p=>setModal({type:'form',product:p})}/>} 
-      {tab === 'dates' && <Dates products={products} mode={datesMode} setMode={setDatesMode}/>} 
+      {tab === 'dates' && <Dates products={products} mode={datesMode} setMode={setDatesMode} appliances={appliances}/>} 
       {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError} authUser={authUser} authBusy={authBusy} authError={authError} onLogin={doLogin} onRegister={doRegister} onLogout={doLogout} onVerifyCloud={verifyCloudSnapshot} cloudCheckMessage={cloudCheckMessage} cloudCheckBusy={cloudCheckBusy}/>} 
       {tab === 'drawers' && <DrawerView appliances={appliances} products={products} selection={drawerView} setSelection={setDrawerView} edit={p=>setModal({type:'form',product:p})}/>} 
     </main>
@@ -390,7 +390,14 @@ function Settings({appliances,setAppliances,products,householdId,setHouseholdId,
 }
 
 function Stock({appliances,products,filter,setFilter,search,setSearch,edit}) { return <><h2 className="text-xl font-bold">Stock</h2><input className="input" placeholder="Rechercher" value={search} onChange={e=>setSearch(e.target.value)}/><div className="flex gap-2 overflow-auto"><Chip active={filter==='all'} click={()=>setFilter('all')}>Tout</Chip>{appliances.map(a=><Chip key={a.id} active={filter===a.id} click={()=>setFilter(a.id)}>{a.name}</Chip>)}</div>{products.length?products.map(p=><ProductRow key={p.id} p={p} edit={edit}/>):<Empty text="Aucun produit"/>}</> }
-function Dates({products,mode,setMode}) { const list=[...products].sort((a,b)=>a.expiry.localeCompare(b.expiry)).filter(p=>mode==='watch'?isWatchProduct(p):true); return <><div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-xl font-bold">Péremption</h2><div className="flex gap-2"><Chip active={mode==='all'} click={()=>setMode('all')}>Tout</Chip><Chip active={mode==='watch'} click={()=>setMode('watch')}>À surveiller</Chip></div></div>{list.length?list.map(p=><div key={p.id} className="flex rounded-xl bg-white p-3"><b className="flex-1">{p.name}</b><Badge date={p.expiry}/></div>):<Empty text="Aucun produit à surveiller"/>}</> }
+function Dates({products,mode,setMode,appliances}) {
+  const list=[...products].sort((a,b)=>a.expiry.localeCompare(b.expiry)).filter(p=>mode==='watch'?isWatchProduct(p):true);
+  const locationLabel = p => {
+    const appliance = appliances.find(a=>a.id===p.applianceId);
+    const shelf = appliance?.shelves.find(s=>s.id===p.shelfId);
+    return [appliance?.name, shelf?.name].filter(Boolean).join(' • ');
+  };
+  return <><div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-xl font-bold">Péremption</h2><div className="flex gap-2"><Chip active={mode==='all'} click={()=>setMode('all')}>Tout</Chip><Chip active={mode==='watch'} click={()=>setMode('watch')}>À surveiller</Chip></div></div>{list.length?list.map(p=><div key={p.id} className="flex items-start gap-3 rounded-xl bg-white p-3"><span className="flex-1"><b className="block">{p.name}</b><small className="block text-slate-500">{locationLabel(p) || 'Emplacement non défini'}</small></span><Badge date={p.expiry}/></div>):<Empty text="Aucun produit à surveiller"/>}</> }
 function ProductRow({p,edit}) { return <button onClick={()=>edit(p)} className="mb-2 flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-sm">{p.imageUrl&&<img src={p.imageUrl} className="h-12 w-12 rounded-lg object-contain"/>}<span className="flex-1"><b>{p.name}</b><small className="block text-slate-500">Quantité : {p.quantity}</small></span><Badge date={p.expiry}/></button> }
 
 function ProductForm({appliances,product,code,off,error,save,close,remove}) {
