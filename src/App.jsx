@@ -20,6 +20,7 @@ const initialAppliances = [
 const householdKey = 'householdId';
 const load = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
 const days = d => Math.ceil((new Date(`${d}T00:00:00`) - new Date().setHours(0,0,0,0)) / 864e5);
+const isWatchProduct = p => { const d = days(p.expiry); return d < 0 || d === 1; };
 const uid = prefix => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const sanitizeHousehold = value => String(value || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-').slice(0, 64);
 const serializeCloudData = payload => JSON.stringify(payload);
@@ -50,6 +51,7 @@ export default function App() {
   const [cloudCheckMessage, setCloudCheckMessage] = useState('');
   const [cloudCheckBusy, setCloudCheckBusy] = useState(false);
   const [tab, setTab] = useState('home');
+  const [datesMode, setDatesMode] = useState('all');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
@@ -281,13 +283,17 @@ export default function App() {
   return <div className="mx-auto min-h-screen max-w-md bg-slate-50 pb-24 shadow-xl">
     <header className="rounded-b-[2rem] bg-gradient-to-br from-cyan-600 to-blue-700 px-5 pb-6 pt-8 text-white">
       <p className="text-sm text-cyan-100">Inventaire intelligent</p><h1 className="text-2xl font-bold">❄ Mon Congélateur</h1>
-      <div className="mt-4 grid grid-cols-3 gap-2 text-center">{[[products.length,'produits'],[products.reduce((n,p)=>n+Number(p.quantity),0),'quantité'],[products.filter(p=>days(p.expiry)<=7).length,'à surveiller']].map(x=><div className="rounded-xl bg-white/15 p-2" key={x[1]}><b className="block text-xl">{x[0]}</b><small>{x[1]}</small></div>)}</div>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-xl bg-white/15 p-2"><b className="block text-xl">{products.length}</b><small>produits</small></div>
+        <div className="rounded-xl bg-white/15 p-2"><b className="block text-xl">{products.reduce((n,p)=>n+Number(p.quantity),0)}</b><small>quantité</small></div>
+        <button onClick={()=>{setDatesMode('watch');setTab('dates');}} className="rounded-xl bg-white/15 p-2 transition hover:bg-white/25" type="button"><b className="block text-xl">{products.filter(isWatchProduct).length}</b><small>à surveiller</small></button>
+      </div>
     </header>
 
     <main className="space-y-4 p-4">
       {tab === 'home' && <Home appliances={appliances} products={products} scan={()=>setModal({type:'scan'})} add={()=>setModal({type:'form',product:null,code:''})} openShelf={openShelf}/>} 
       {tab === 'stock' && <Stock appliances={appliances} products={shown} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} edit={p=>setModal({type:'form',product:p})}/>} 
-      {tab === 'dates' && <Dates products={products}/>} 
+      {tab === 'dates' && <Dates products={products} mode={datesMode} setMode={setDatesMode}/>} 
       {tab === 'settings' && <Settings appliances={appliances} setAppliances={setAppliances} products={products} householdId={householdId} setHouseholdId={setHouseholdId} syncMessage={syncMessage} syncError={syncError} authUser={authUser} authBusy={authBusy} authError={authError} onLogin={doLogin} onRegister={doRegister} onLogout={doLogout} onVerifyCloud={verifyCloudSnapshot} cloudCheckMessage={cloudCheckMessage} cloudCheckBusy={cloudCheckBusy}/>} 
       {tab === 'drawers' && <DrawerView appliances={appliances} products={products} selection={drawerView} setSelection={setDrawerView} edit={p=>setModal({type:'form',product:p})}/>} 
     </main>
@@ -318,10 +324,14 @@ function DrawerView({appliances,products,selection,setSelection,edit}) {
 
 function Settings({appliances,setAppliances,products,householdId,setHouseholdId,syncMessage,syncError,authUser,authBusy,authError,onLogin,onRegister,onLogout,onVerifyCloud,cloudCheckMessage,cloudCheckBusy}) {
   const [newNames,setNewNames]=useState({});
+  const [newApplianceName,setNewApplianceName]=useState('');
+  const [newApplianceType,setNewApplianceType]=useState('Congélateur');
   const [newHousehold,setNewHousehold]=useState(householdId);
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
   useEffect(()=>setNewHousehold(householdId),[householdId]);
+  function addAppliance(){const name=newApplianceName.trim();if(!name)return;setAppliances(list=>[...list,{id:uid('a'),name,type:newApplianceType,shelves:[{id:uid('s'),name:'Emplacement 1'}]}]);setNewApplianceName('')}
+  function renameAppliance(applianceId){const current=appliances.find(a=>a.id===applianceId);const name=window.prompt('Nouveau nom de l’appareil',current?.name||'')?.trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,name}:a))}
   function addShelf(applianceId){const name=(newNames[applianceId]||'').trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:[...a.shelves,{id:uid('s'),name}]}:a));setNewNames(x=>({...x,[applianceId]:''}))}
   function renameShelf(applianceId,shelfId){const current=appliances.find(a=>a.id===applianceId)?.shelves.find(s=>s.id===shelfId);const name=window.prompt('Nouveau nom de l’emplacement',current?.name||'')?.trim();if(!name)return;setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:a.shelves.map(s=>s.id===shelfId?{...s,name}:s)}:a))}
   function deleteShelf(applianceId,shelfId){if(products.some(p=>p.applianceId===applianceId&&p.shelfId===shelfId)){window.alert('Impossible : déplacez ou supprimez d’abord les produits de cet emplacement.');return}setAppliances(list=>list.map(a=>a.id===applianceId?{...a,shelves:a.shelves.filter(s=>s.id!==shelfId)}:a))}
@@ -363,17 +373,32 @@ function Settings({appliances,setAppliances,products,householdId,setHouseholdId,
       {syncError && <small className="block rounded-xl bg-red-50 p-3 text-red-700">{syncError}</small>}
       {!isFirebaseReady && <small className="block rounded-xl bg-amber-50 p-3 text-amber-700">Ajoutez les variables VITE_FIREBASE_* dans un fichier .env pour activer la synchro.</small>}
     </section>
-    <h2 className="text-xl font-bold">Gérer les emplacements</h2>{appliances.map(a=><section key={a.id} className="space-y-3 rounded-2xl bg-white p-4 shadow-sm"><div><b>{a.name}</b><small className="block text-slate-500">{a.type}</small></div>{a.shelves.map(s=><div key={s.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3"><span className="flex-1"><b className="text-sm">{s.name}</b><small className="block text-slate-500">{products.filter(p=>p.applianceId===a.id&&p.shelfId===s.id).length} produit(s)</small></span><button onClick={()=>renameShelf(a.id,s.id)} className="rounded-lg border px-2 py-1 text-sm">Renommer</button><button onClick={()=>deleteShelf(a.id,s.id)} className="rounded-lg border border-red-200 px-2 py-1 text-sm text-red-600">×</button></div>)}<div className="flex gap-2"><input value={newNames[a.id]||''} onChange={e=>setNewNames(x=>({...x,[a.id]:e.target.value}))} placeholder="Nouveau tiroir ou emplacement" className="input min-w-0 flex-1"/><button onClick={()=>addShelf(a.id)} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">+</button></div></section>)}</>;
+    <h2 className="text-xl font-bold">Gérer les appareils</h2>
+    <section className="mb-4 space-y-3 rounded-2xl bg-white p-4 shadow-sm">
+      <div className="grid grid-cols-1 gap-2">
+        <input value={newApplianceName} onChange={e=>setNewApplianceName(e.target.value)} placeholder="Nom du frigo / congélateur" className="input"/>
+        <div className="flex gap-2">
+          <select value={newApplianceType} onChange={e=>setNewApplianceType(e.target.value)} className="input min-w-0 flex-1 bg-white">
+            <option>Congélateur</option>
+            <option>Réfrigérateur</option>
+          </select>
+          <button onClick={addAppliance} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">Ajouter</button>
+        </div>
+      </div>
+    </section>
+    <h2 className="text-xl font-bold">Gérer les emplacements</h2>{appliances.map(a=><section key={a.id} className="space-y-3 rounded-2xl bg-white p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><span><b>{a.name}</b><small className="block text-slate-500">{a.type}</small></span><button onClick={()=>renameAppliance(a.id)} className="rounded-lg border px-2 py-1 text-sm">Renommer</button></div>{a.shelves.map(s=><div key={s.id} className="flex items-center gap-2 rounded-xl bg-slate-50 p-3"><span className="flex-1"><b className="text-sm">{s.name}</b><small className="block text-slate-500">{products.filter(p=>p.applianceId===a.id&&p.shelfId===s.id).length} produit(s)</small></span><button onClick={()=>renameShelf(a.id,s.id)} className="rounded-lg border px-2 py-1 text-sm">Renommer</button><button onClick={()=>deleteShelf(a.id,s.id)} className="rounded-lg border border-red-200 px-2 py-1 text-sm text-red-600">×</button></div>)}<div className="flex gap-2"><input value={newNames[a.id]||''} onChange={e=>setNewNames(x=>({...x,[a.id]:e.target.value}))} placeholder="Nouveau tiroir ou emplacement" className="input min-w-0 flex-1"/><button onClick={()=>addShelf(a.id)} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">+</button></div></section>)}</>;
 }
 
 function Stock({appliances,products,filter,setFilter,search,setSearch,edit}) { return <><h2 className="text-xl font-bold">Stock</h2><input className="input" placeholder="Rechercher" value={search} onChange={e=>setSearch(e.target.value)}/><div className="flex gap-2 overflow-auto"><Chip active={filter==='all'} click={()=>setFilter('all')}>Tout</Chip>{appliances.map(a=><Chip key={a.id} active={filter===a.id} click={()=>setFilter(a.id)}>{a.name}</Chip>)}</div>{products.length?products.map(p=><ProductRow key={p.id} p={p} edit={edit}/>):<Empty text="Aucun produit"/>}</> }
-function Dates({products}) { return <><h2 className="text-xl font-bold">Péremption</h2>{[...products].sort((a,b)=>a.expiry.localeCompare(b.expiry)).map(p=><div key={p.id} className="flex rounded-xl bg-white p-3"><b className="flex-1">{p.name}</b><Badge date={p.expiry}/></div>)}</> }
+function Dates({products,mode,setMode}) { const list=[...products].sort((a,b)=>a.expiry.localeCompare(b.expiry)).filter(p=>mode==='watch'?isWatchProduct(p):true); return <><div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-xl font-bold">Péremption</h2><div className="flex gap-2"><Chip active={mode==='all'} click={()=>setMode('all')}>Tout</Chip><Chip active={mode==='watch'} click={()=>setMode('watch')}>À surveiller</Chip></div></div>{list.length?list.map(p=><div key={p.id} className="flex rounded-xl bg-white p-3"><b className="flex-1">{p.name}</b><Badge date={p.expiry}/></div>):<Empty text="Aucun produit à surveiller"/>}</> }
 function ProductRow({p,edit}) { return <button onClick={()=>edit(p)} className="mb-2 flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-sm">{p.imageUrl&&<img src={p.imageUrl} className="h-12 w-12 rounded-lg object-contain"/>}<span className="flex-1"><b>{p.name}</b><small className="block text-slate-500">Quantité : {p.quantity}</small></span><Badge date={p.expiry}/></button> }
 
 function ProductForm({appliances,product,code,off,error,save,close,remove}) {
   const a0=appliances[0]; const [f,setF]=useState(product||{name:off?.name||'',barcode:code||'',quantity:1,applianceId:a0?.id||'',shelfId:a0?.shelves[0]?.id||'',expiry:new Date(Date.now()+30*864e5).toISOString().slice(0,10),imageUrl:off?.imageUrl||'',source:off?.source||''});
+  const galleryRef = useRef(null); const cameraRef = useRef(null);
   const appliance=appliances.find(a=>a.id===f.applianceId)||a0; const set=(k,v)=>setF(x=>({...x,[k]:v}));
-  return <form onSubmit={e=>{e.preventDefault();save(f)}} className="space-y-3"><div className="flex justify-between"><h2 className="text-xl font-bold">{product?'Modifier':'Ajouter'}</h2><button type="button" onClick={close}>✕</button></div>{off?.imageUrl&&<img src={off.imageUrl} className="mx-auto h-32 object-contain"/>}{off&&<p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">✓ Trouvé sur Open Food Facts{off.packageQuantity&&` · ${off.packageQuantity}`}</p>}{!off&&code&&<p className="rounded-xl bg-amber-50 p-3 text-sm">{error||'Produit non trouvé. Saisie manuelle possible.'}</p>}<Field label="Nom"><input required className="input" value={f.name} onChange={e=>set('name',e.target.value)}/></Field><Field label="Code-barres"><input className="input" value={f.barcode} onChange={e=>set('barcode',e.target.value)}/></Field><Field label="Quantité"><input required type="number" min="1" className="input" value={f.quantity} onChange={e=>set('quantity',+e.target.value)}/></Field><Field label="Appareil"><select className="input bg-white" value={f.applianceId} onChange={e=>{const a=appliances.find(x=>x.id===e.target.value);setF(x=>({...x,applianceId:a.id,shelfId:a.shelves[0]?.id||''}))}}>{appliances.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></Field><Field label="Tiroir / emplacement"><select required className="input bg-white" value={f.shelfId} onChange={e=>set('shelfId',e.target.value)}>{appliance?.shelves.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field><Field label="Date de péremption"><input required type="date" className="input" value={f.expiry} onChange={e=>set('expiry',e.target.value)}/></Field><button className="w-full rounded-xl bg-cyan-600 p-3 font-bold text-white">Enregistrer</button>{remove&&<button type="button" onClick={remove} className="w-full rounded-xl border border-red-200 p-3 text-red-600">Supprimer</button>}</form>;
+  function onSelectImage(file){if(!file)return;const reader=new FileReader();reader.onload=()=>set('imageUrl',String(reader.result||''));reader.readAsDataURL(file)}
+  return <form onSubmit={e=>{e.preventDefault();save(f)}} className="space-y-3"><div className="flex justify-between"><h2 className="text-xl font-bold">{product?'Modifier':'Ajouter'}</h2><button type="button" onClick={close}>✕</button></div>{f.imageUrl&&<img src={f.imageUrl} className="mx-auto h-32 rounded-xl object-contain"/>}{off&&<p className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">✓ Trouvé sur Open Food Facts{off.packageQuantity&&` · ${off.packageQuantity}`}</p>}{!off&&code&&<p className="rounded-xl bg-amber-50 p-3 text-sm">{error||'Produit non trouvé. Saisie manuelle possible.'}</p>}<div className="grid grid-cols-2 gap-2"><button type="button" onClick={()=>galleryRef.current?.click()} className="rounded-xl border border-slate-300 px-3 py-2 text-sm">Choisir une photo</button><button type="button" onClick={()=>cameraRef.current?.click()} className="rounded-xl border border-slate-300 px-3 py-2 text-sm">Prendre une photo</button></div><input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={e=>onSelectImage(e.target.files?.[0])}/><input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>onSelectImage(e.target.files?.[0])}/>{f.imageUrl&&<button type="button" onClick={()=>set('imageUrl','')} className="w-full rounded-xl border border-slate-300 p-2 text-sm text-slate-700">Retirer la photo</button>}<Field label="Nom"><input required className="input" value={f.name} onChange={e=>set('name',e.target.value)}/></Field><Field label="Code-barres"><input className="input" value={f.barcode} onChange={e=>set('barcode',e.target.value)}/></Field><Field label="Quantité"><input required type="number" min="1" className="input" value={f.quantity} onChange={e=>set('quantity',+e.target.value)}/></Field><Field label="Appareil"><select className="input bg-white" value={f.applianceId} onChange={e=>{const a=appliances.find(x=>x.id===e.target.value);setF(x=>({...x,applianceId:a.id,shelfId:a.shelves[0]?.id||''}))}}>{appliances.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></Field><Field label="Tiroir / emplacement"><select required className="input bg-white" value={f.shelfId} onChange={e=>set('shelfId',e.target.value)}>{appliance?.shelves.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field><Field label="Date de péremption"><input required type="date" className="input" value={f.expiry} onChange={e=>set('expiry',e.target.value)}/></Field><button className="w-full rounded-xl bg-cyan-600 p-3 font-bold text-white">Enregistrer</button>{remove&&<button type="button" onClick={remove} className="w-full rounded-xl border border-red-200 p-3 text-red-600">Supprimer</button>}</form>;
 }
 function Loading(){return <div className="py-10 text-center"><div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-cyan-100 border-t-cyan-600"/><b className="mt-4 block">Recherche Open Food Facts…</b></div>}
 function Field({label,children}){return <label className="block"><small className="mb-1 block font-medium">{label}</small>{children}</label>}
