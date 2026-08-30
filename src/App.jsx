@@ -381,6 +381,7 @@ function Settings({appliances,setAppliances,products,householdId,setHouseholdId,
           <select value={newApplianceType} onChange={e=>setNewApplianceType(e.target.value)} className="input min-w-0 flex-1 bg-white">
             <option>Congélateur</option>
             <option>Réfrigérateur</option>
+            <option>Autre</option>
           </select>
           <button onClick={addAppliance} className="rounded-xl bg-cyan-600 px-4 font-bold text-white">Ajouter</button>
         </div>
